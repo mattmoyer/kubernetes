@@ -35,6 +35,7 @@ import (
 	kubeadmconstants "k8s.io/kubernetes/cmd/kubeadm/app/constants"
 	addonsphase "k8s.io/kubernetes/cmd/kubeadm/app/phases/addons"
 	apiconfigphase "k8s.io/kubernetes/cmd/kubeadm/app/phases/apiconfig"
+	"k8s.io/kubernetes/cmd/kubeadm/app/phases/certs/pkiutil"
 	controlplanephase "k8s.io/kubernetes/cmd/kubeadm/app/phases/controlplane"
 	kubeconfigphase "k8s.io/kubernetes/cmd/kubeadm/app/phases/kubeconfig"
 	markmasterphase "k8s.io/kubernetes/cmd/kubeadm/app/phases/markmaster"
@@ -43,6 +44,7 @@ import (
 	"k8s.io/kubernetes/cmd/kubeadm/app/preflight"
 	kubeadmutil "k8s.io/kubernetes/cmd/kubeadm/app/util"
 	configutil "k8s.io/kubernetes/cmd/kubeadm/app/util/config"
+	"k8s.io/kubernetes/cmd/kubeadm/app/util/pubkeypin"
 	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/util/version"
 )
@@ -64,7 +66,7 @@ var (
 		You can now join any number of machines by running the following on each node
 		as root:
 
-		  kubeadm join --token {{.Token}} {{.MasterIP}}:{{.MasterPort}}
+		  kubeadm join --token {{.Token}} {{.MasterIP}}:{{.MasterPort}} --tls-discovery-root-ca {{.CAPubKeyPin}}
 
 		`)))
 )
@@ -297,10 +299,17 @@ func (i *Init) Run(out io.Writer) error {
 		}
 	}
 
+	// Load the CA certificate from so we can pin its public key
+	caCert, err := pkiutil.TryLoadCertFromDisk(i.cfg.CertificatesDir, kubeadmconstants.CACertAndKeyBaseName)
+	if err != nil {
+		return err
+	}
+
 	ctx := map[string]string{
 		"KubeConfigPath": filepath.Join(kubeadmconstants.KubernetesDir, kubeadmconstants.AdminKubeConfigFileName),
 		"KubeConfigName": kubeadmconstants.AdminKubeConfigFileName,
 		"Token":          i.cfg.Token,
+		"CAPubKeyPin":    pubkeypin.Hash(caCert),
 		"MasterIP":       i.cfg.API.AdvertiseAddress,
 		"MasterPort":     strconv.Itoa(int(i.cfg.API.BindPort)),
 	}
