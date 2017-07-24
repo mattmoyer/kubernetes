@@ -118,6 +118,13 @@ func NewCmdJoin(out io.Writer) *cobra.Command {
 	cmd.PersistentFlags().StringVar(
 		&cfg.TLSBootstrapToken, "tls-bootstrap-token", "",
 		"A token used for TLS bootstrapping")
+	cmd.PersistentFlags().StringSliceVar(
+		&cfg.TLSDiscoveryRootCAPubKeys, "tls-discovery-root-ca", []string{},
+		"Validate that the root CA public key matches this SHA-256 SPKI hash (repeat to allow multiple public keys).")
+	cmd.PersistentFlags().BoolVar(
+		&cfg.TLSDiscoveryAllowUnsafe, "tls-discovery-allow-unsafe", false,
+		"Disable warnings when using token-based TLS discovery without --tls-discovery-root-ca public key pinning.")
+
 	cmd.PersistentFlags().StringVar(
 		&cfg.Token, "token", "",
 		"Use this token for both discovery-token and tls-bootstrap-token")
