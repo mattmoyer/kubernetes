@@ -54,6 +54,7 @@ filegroup(
         ":package-srcs",
         "//cmd/kubeadm/app/util/config:all-srcs",
         "//cmd/kubeadm/app/util/kubeconfig:all-srcs",
+        "//cmd/kubeadm/app/util/pubkeypin:all-srcs",
         "//cmd/kubeadm/app/util/token:all-srcs",
     ],
     tags = ["automanaged"],
