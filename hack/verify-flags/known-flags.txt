@@ -685,6 +685,8 @@ test-timeout
 tls-bootstrap-token
 tls-ca-file
 tls-cert-file
+tls-discovery-allow-unsafe
+tls-discovery-root-ca
 tls-private-key-file
 tls-sni-cert-key
 token-auth-file
