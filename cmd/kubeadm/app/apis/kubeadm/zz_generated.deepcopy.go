@@ -191,6 +191,11 @@ func (in *NodeConfiguration) DeepCopyInto(out *NodeConfiguration) {
 		*out = make([]string, len(*in))
 		copy(*out, *in)
 	}
+	if in.TLSDiscoveryRootCAPubKeys != nil {
+		in, out := &in.TLSDiscoveryRootCAPubKeys, &out.TLSDiscoveryRootCAPubKeys
+		*out = make([]string, len(*in))
+		copy(*out, *in)
+	}
 	return
 }
 
