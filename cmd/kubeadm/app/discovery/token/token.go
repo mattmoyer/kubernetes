@@ -72,7 +72,7 @@ func RetrieveValidatedClusterInfo(discoveryToken string, tokenAPIServers, rootCA
 	// The endpoint that wins the race and completes the task first gets its kubeconfig returned below
 	baseKubeConfig := runForEndpointsAndReturnFirst(tokenAPIServers, func(endpoint string) (*clientcmdapi.Config, error) {
 
-		// clusterInfoURL is the URL of the bootstrap cluster info ConfigMap on the Kubernetes API
+		// clusterInfoURL is the URL of the discovery cluster-info ConfigMap on the Kubernetes API
 		clusterInfoURLString := fmt.Sprintf(
 			"https://%s/api/v1/namespaces/%s/configmaps/%s",
 			endpoint,
@@ -85,7 +85,7 @@ func RetrieveValidatedClusterInfo(discoveryToken string, tokenAPIServers, rootCA
 		fmt.Printf("[discovery] Requesting cluster-info from %q\n", clusterInfoURL)
 
 		var clusterinfo *v1.ConfigMap
-		var bootstrapCertificateChain []*x509.Certificate
+		var discoveryCertificateChain []*x509.Certificate
 
 		wait.PollImmediateInfinite(constants.DiscoveryRetryInterval, func() (bool, error) {
 			response, certificates, err := withInsecureHTTPClient(func(client *http.Client) (*http.Response, error) {
@@ -113,7 +113,7 @@ func RetrieveValidatedClusterInfo(discoveryToken string, tokenAPIServers, rootCA
 			}
 
 			// Success, so save off the certificate chain for later validation
-			bootstrapCertificateChain = certificates
+			discoveryCertificateChain = certificates
 			return true, nil
 		})
 
@@ -158,13 +158,13 @@ func RetrieveValidatedClusterInfo(discoveryToken string, tokenAPIServers, rootCA
 
 		// Build an intermediate CA pool containing all the non-leaf certificates sent by the server
 		chainCerts := x509.NewCertPool()
-		for _, chainCert := range bootstrapCertificateChain[1:] {
+		for _, chainCert := range discoveryCertificateChain[1:] {
 			chainCerts.AddCert(chainCert)
 		}
 
 		// Now that we know the root CA pool, validate the original certificate chain
 		// against the server's hostname
-		_, err = bootstrapCertificateChain[0].Verify(x509.VerifyOptions{
+		_, err = discoveryCertificateChain[0].Verify(x509.VerifyOptions{
 			DNSName:       clusterInfoURL.Hostname(),
 			Roots:         pinnedRoots,
 			Intermediates: chainCerts,
