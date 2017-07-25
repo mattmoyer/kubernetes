@@ -42,6 +42,9 @@ import (
 
 const BootstrapUser = "token-bootstrap-client"
 
+// ClusterInfoMaxSizeBytes is the maximum allowed size of the cluster-info ConfigMap (in bytes)
+const ClusterInfoMaxSizeBytes = 1024 * 1024 * 10 // 10 MiB
+
 var (
 	errInsecureClientUsedMoreThanOnce = fmt.Errorf("client must be used for only a single request")
 	errInsecureClientEmptyCertChain   = fmt.Errorf("expected at least one server certificate")
@@ -94,8 +97,9 @@ func RetrieveValidatedClusterInfo(discoveryToken string, tokenAPIServers, rootCA
 			}
 			defer response.Body.Close()
 
-			// Read the entire response body
-			responseBytes, err := ioutil.ReadAll(response.Body)
+			// Read the entire response body (up to ClusterInfoMaxSizeBytes)
+			responseBytes, err := ioutil.ReadAll(http.MaxBytesReader(nil, response.Body, ClusterInfoMaxSizeBytes))
+			fmt.Printf("[discovery] Actual cluster info was %d bytes\n", len(responseBytes))
 			if err != nil {
 				fmt.Printf("[discovery] Failed to read cluster info response, will try again: [%s]\n", err)
 				return false, nil
