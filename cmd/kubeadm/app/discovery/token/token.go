@@ -262,6 +262,7 @@ func withInsecureHTTPClient(
 
 	// Make sure the wrapper is being used correctly
 	if len(certificates) == 0 {
+		response.Body.Close()
 		return nil, nil, errInsecureClientNoRequest
 	}
 	return response, certificates, nil

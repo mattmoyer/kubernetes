@@ -200,9 +200,22 @@ func TestWithInsecureHTTPClientInnerError(t *testing.T) {
 	}
 }
 
+// mockCloser is a mock io.ReadCloser so we can test whether it gets closed
+type mockCloser struct {
+	wasClosed bool
+}
+
+func (c *mockCloser) Close() error {
+	c.wasClosed = true
+	return nil
+}
+func (c *mockCloser) Read([]byte) (int, error) { return 0, nil }
+
 func TestWithInsecureHTTPClientNoCall(t *testing.T) {
+	mockBody := &mockCloser{}
+	responseInner := http.Response{Body: mockBody}
 	response, certs, err := withInsecureHTTPClient(func(*http.Client) (*http.Response, error) {
-		return nil, nil
+		return &responseInner, nil
 	})
 	if response != nil {
 		t.Errorf("expected nil response")
@@ -212,5 +225,8 @@ func TestWithInsecureHTTPClientNoCall(t *testing.T) {
 	}
 	if err != errInsecureClientNoRequest {
 		t.Errorf("expected errInsecureClientNoRequest, got %v", err)
+	}
+	if !mockBody.wasClosed {
+		t.Errorf("expected the http response body to be closed")
 	}
 }
