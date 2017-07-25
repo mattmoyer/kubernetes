@@ -19,7 +19,6 @@ limitations under the License.
 package pubkeypin
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/hex"
@@ -28,25 +27,31 @@ import (
 
 // Set is a set of pinned x509 public keys.
 type Set struct {
-	sha256Hashes [][]byte
+	hashes map[string]bool
 }
 
 // NewSet returns a new, empty PubKeyPinSet
 func NewSet() *Set {
-	return &Set{}
+	return &Set{make(map[string]bool)}
 }
 
 // Allow adds an allowed public key hash to the Set
 func (s *Set) Allow(pubKeyHashes ...string) error {
 	for _, pubKeyHash := range pubKeyHashes {
-		pubKeyHashBytes, err := hex.DecodeString(pubKeyHash)
+		// validate that the hash is valid hex
+		_, err := hex.DecodeString(pubKeyHash)
 		if err != nil {
 			return fmt.Errorf("invalid public key hash: %v", err)
 		}
-		if len(pubKeyHashBytes) != sha256.Size {
-			return fmt.Errorf("invalid public key hash (expected a %d byte SHA-256 hash, found %d bytes)", sha256.Size, len(pubKeyHashBytes))
+
+		// validate that the hash is the right length to be a full SHA-256 hash
+		hashLength := hex.DecodedLen(len(pubKeyHash))
+		if hashLength != sha256.Size {
+			return fmt.Errorf("invalid public key hash (expected a %d byte SHA-256 hash, found %d bytes)", sha256.Size, hashLength)
 		}
-		s.sha256Hashes = append(s.sha256Hashes, pubKeyHashBytes)
+
+		// in the end, just store the original hex string in memory
+		s.hashes[pubKeyHash] = true
 	}
 	return nil
 }
@@ -54,18 +59,16 @@ func (s *Set) Allow(pubKeyHashes ...string) error {
 // Check if a certificate matches one of the public keys in the set
 func (s *Set) Check(certificate *x509.Certificate) error {
 	actualHash := sha256.Sum256(certificate.RawSubjectPublicKeyInfo)
-
-	for _, pinnedHash := range s.sha256Hashes {
-		if bytes.Equal(actualHash[:], pinnedHash) {
-			return nil
-		}
+	actualHashHex := hex.EncodeToString(actualHash[:])
+	if s.hashes[actualHashHex] {
+		return nil
 	}
 	return fmt.Errorf("public key %s not pinned", hex.EncodeToString(actualHash[:]))
 }
 
 // Empty returns true if the Set contains no pinned public keys.
 func (s *Set) Empty() bool {
-	return len(s.sha256Hashes) == 0
+	return len(s.hashes) == 0
 }
 
 // Hash calculates the SHA-256 hash of the Subject Public Key Information (SPKI)
