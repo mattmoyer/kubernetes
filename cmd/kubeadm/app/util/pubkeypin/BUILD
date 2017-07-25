@@ -13,14 +13,12 @@ go_test(
     srcs = ["pubkeypin_test.go"],
     library = ":go_default_library",
     tags = ["automanaged"],
-    deps = ["//cmd/kubeadm/app/apis/kubeadm:go_default_library"],
 )
 
 go_library(
     name = "go_default_library",
     srcs = ["pubkeypin.go"],
     tags = ["automanaged"],
-    deps = ["//cmd/kubeadm/app/apis/kubeadm:go_default_library"],
 )
 
 filegroup(
