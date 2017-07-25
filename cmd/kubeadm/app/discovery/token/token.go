@@ -70,13 +70,14 @@ func RetrieveValidatedClusterInfo(discoveryToken string, tokenAPIServers, rootCA
 	baseKubeConfig := runForEndpointsAndReturnFirst(tokenAPIServers, func(endpoint string) (*clientcmdapi.Config, error) {
 
 		// clusterInfoURL is the URL of the bootstrap cluster info ConfigMap on the Kubernetes API
-		clusterInfoURL, err := url.Parse(fmt.Sprintf(
+		clusterInfoURLString := fmt.Sprintf(
 			"https://%s/api/v1/namespaces/%s/configmaps/%s",
 			endpoint,
 			metav1.NamespacePublic,
-			bootstrapapi.ConfigMapClusterInfo))
+			bootstrapapi.ConfigMapClusterInfo)
+		clusterInfoURL, err := url.Parse(clusterInfoURLString)
 		if err != nil {
-			return nil, fmt.Errorf("invalid URL, can't connect: %v", err)
+			return nil, fmt.Errorf("invalid URL %q, can't connect: %v", clusterInfoURLString, err)
 		}
 		fmt.Printf("[discovery] Requesting cluster-info from %q\n", clusterInfoURL)
 
