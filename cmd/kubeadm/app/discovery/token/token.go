@@ -17,14 +17,10 @@ limitations under the License.
 package token
 
 import (
-	"crypto/tls"
+	"bytes"
 	"crypto/x509"
-	"encoding/json"
 	"encoding/pem"
 	"fmt"
-	"io/ioutil"
-	"net/http"
-	"net/url"
 	"sync"
 
 	"k8s.io/api/core/v1"
@@ -42,19 +38,9 @@ import (
 
 const BootstrapUser = "token-bootstrap-client"
 
-// ClusterInfoMaxSizeBytes is the maximum allowed size of the cluster-info ConfigMap (in bytes)
-const ClusterInfoMaxSizeBytes = 1024 * 1024 * 10 // 10 MiB
-
-var (
-	errInsecureClientUsedMoreThanOnce = fmt.Errorf("client must be used for only a single request")
-	errInsecureClientEmptyCertChain   = fmt.Errorf("expected at least one server certificate")
-	errInsecureClientNoRequest        = fmt.Errorf("doRequest did not make a request using the withInsecureHTTPClient client")
-	errInvalidPEMData                 = fmt.Errorf("invalid PEM data")
-	errTrailingPEMData                = fmt.Errorf("trailing data after first PEM block")
-)
-
 // RetrieveValidatedClusterInfo connects to the API Server and tries to fetch the cluster-info ConfigMap
-// It then makes sure it can trust the API Server by looking at the JWS-signed tokens
+// It then makes sure it can trust the API Server by looking at the JWS-signed tokens and (if rootCAPubKeys is not empty)
+// validating the cluster CA against a set of pinned public keys
 func RetrieveValidatedClusterInfo(discoveryToken string, tokenAPIServers, rootCAPubKeys []string) (*clientcmdapi.Cluster, error) {
 	tokenId, tokenSecret, err := tokenutil.ParseToken(discoveryToken)
 	if err != nil {
@@ -72,112 +58,123 @@ func RetrieveValidatedClusterInfo(discoveryToken string, tokenAPIServers, rootCA
 	// The endpoint that wins the race and completes the task first gets its kubeconfig returned below
 	baseKubeConfig := runForEndpointsAndReturnFirst(tokenAPIServers, func(endpoint string) (*clientcmdapi.Config, error) {
 
-		// clusterInfoURL is the URL of the discovery cluster-info ConfigMap on the Kubernetes API
-		clusterInfoURLString := fmt.Sprintf(
-			"https://%s/api/v1/namespaces/%s/configmaps/%s",
-			endpoint,
-			metav1.NamespacePublic,
-			bootstrapapi.ConfigMapClusterInfo)
-		clusterInfoURL, err := url.Parse(clusterInfoURLString)
+		insecureBootstrapConfig := buildInsecureBootstrapKubeConfig(endpoint)
+		clusterName := insecureBootstrapConfig.Contexts[insecureBootstrapConfig.CurrentContext].Cluster
+
+		insecureClient, err := kubeconfigutil.KubeConfigToClientSet(insecureBootstrapConfig)
 		if err != nil {
-			return nil, fmt.Errorf("invalid URL %q, can't connect: %v", clusterInfoURLString, err)
+			return nil, err
 		}
-		fmt.Printf("[discovery] Requesting cluster-info from %q\n", clusterInfoURL)
 
-		var clusterinfo *v1.ConfigMap
-		var discoveryCertificateChain []*x509.Certificate
+		fmt.Printf("[discovery] Created cluster-info discovery client, requesting info from %q\n", insecureBootstrapConfig.Clusters[clusterName].Server)
 
+		// Make an initial insecure connection to get the cluster-info ConfigMap
+		var insecureClusterInfo *v1.ConfigMap
 		wait.PollImmediateInfinite(constants.DiscoveryRetryInterval, func() (bool, error) {
-			response, certificates, err := withInsecureHTTPClient(func(client *http.Client) (*http.Response, error) {
-				return client.Get(clusterInfoURL.String())
-			})
+			var err error
+			insecureClusterInfo, err = insecureClient.CoreV1().ConfigMaps(metav1.NamespacePublic).Get(bootstrapapi.ConfigMapClusterInfo, metav1.GetOptions{})
 			if err != nil {
 				fmt.Printf("[discovery] Failed to request cluster info, will try again: [%s]\n", err)
 				return false, nil
 			}
-			defer response.Body.Close()
-
-			// Read the entire response body (up to ClusterInfoMaxSizeBytes)
-			responseBytes, err := ioutil.ReadAll(http.MaxBytesReader(nil, response.Body, ClusterInfoMaxSizeBytes))
-			fmt.Printf("[discovery] Actual cluster info was %d bytes\n", len(responseBytes))
-			if err != nil {
-				fmt.Printf("[discovery] Failed to read cluster info response, will try again: [%s]\n", err)
-				return false, nil
-			}
-
-			// Parse the JSON into a ConfigMap
-			err = json.Unmarshal(responseBytes, &clusterinfo)
-			if err != nil {
-				fmt.Printf("[discovery] Failed to parse cluster info response, will try again: [%s]\n", err)
-				return false, nil
-			}
-
-			// Success, so save off the certificate chain for later validation
-			discoveryCertificateChain = certificates
 			return true, nil
 		})
 
-		kubeConfigString, ok := clusterinfo.Data[bootstrapapi.KubeConfigKey]
-		if !ok || len(kubeConfigString) == 0 {
+		// Validate the MAC on the kubeconfig from the ConfigMap and load it
+		insecureKubeconfigString, ok := insecureClusterInfo.Data[bootstrapapi.KubeConfigKey]
+		if !ok || len(insecureKubeconfigString) == 0 {
 			return nil, fmt.Errorf("there is no %s key in the %s ConfigMap. This API Server isn't set up for token bootstrapping, can't connect", bootstrapapi.KubeConfigKey, bootstrapapi.ConfigMapClusterInfo)
 		}
-		detachedJWSToken, ok := clusterinfo.Data[bootstrapapi.JWSSignatureKeyPrefix+tokenId]
+		detachedJWSToken, ok := insecureClusterInfo.Data[bootstrapapi.JWSSignatureKeyPrefix+tokenId]
 		if !ok || len(detachedJWSToken) == 0 {
 			return nil, fmt.Errorf("there is no JWS signed token in the %s ConfigMap. This token id %q is invalid for this cluster, can't connect", bootstrapapi.ConfigMapClusterInfo, tokenId)
 		}
-		if !bootstrap.DetachedTokenIsValid(detachedJWSToken, kubeConfigString, tokenId, tokenSecret) {
+		if !bootstrap.DetachedTokenIsValid(detachedJWSToken, insecureKubeconfigString, tokenId, tokenSecret) {
 			return nil, fmt.Errorf("failed to verify JWS signature of received cluster info object, can't trust this API Server")
 		}
-
-		finalConfig, err := clientcmd.Load([]byte(kubeConfigString))
+		insecureKubeconfigBytes := []byte(insecureKubeconfigString)
+		insecureConfig, err := clientcmd.Load(insecureKubeconfigBytes)
 		if err != nil {
 			return nil, fmt.Errorf("couldn't parse the kubeconfig file in the %s configmap: %v", bootstrapapi.ConfigMapClusterInfo, err)
 		}
 
-		// If no TLS root CA pinning was specified, we're done.
+		// If no TLS root CA pinning was specified, we're done
 		if pubKeyPins.Empty() {
 			fmt.Printf("[discovery] Cluster info signature and contents are valid and no TLS pinning was specified, will use API Server %q\n", endpoint)
-			return finalConfig, nil
+			return insecureConfig, nil
 		}
 
-		// For each cluster, validate that its CA matches a pinned key and save that root into an x509.CertPool
-		pinnedRoots := x509.NewCertPool()
-		for _, cluster := range finalConfig.Clusters {
-			caCert, err := getClusterCA(cluster)
-			if err != nil {
-				return nil, fmt.Errorf("could not get cluster CA from %s configmap: %v", bootstrapapi.ConfigMapClusterInfo, err)
-			}
-
-			err = pubKeyPins.Check(caCert)
-			if err != nil {
-				return nil, fmt.Errorf("unknown cluster CA: %v", err)
-			}
-
-			pinnedRoots.AddCert(caCert)
+		// Load the cluster CA from the Config
+		if len(insecureConfig.Clusters) != 1 {
+			return nil, fmt.Errorf("expected the kubeconfig file in the %s configmap to have a single cluster, but it had %d", bootstrapapi.ConfigMapClusterInfo, len(insecureConfig.Clusters))
 		}
-
-		// Build an intermediate CA pool containing all the non-leaf certificates sent by the server
-		chainCerts := x509.NewCertPool()
-		for _, chainCert := range discoveryCertificateChain[1:] {
-			chainCerts.AddCert(chainCert)
+		var clusterCABytes []byte
+		for _, cluster := range insecureConfig.Clusters {
+			clusterCABytes = cluster.CertificateAuthorityData
 		}
-
-		// Now that we know the root CA pool, validate the original certificate chain
-		// against the server's hostname
-		_, err = discoveryCertificateChain[0].Verify(x509.VerifyOptions{
-			DNSName:       clusterInfoURL.Hostname(),
-			Roots:         pinnedRoots,
-			Intermediates: chainCerts,
-		})
+		clusterCA, err := parsePEMCert(clusterCABytes)
 		if err != nil {
-			return nil, fmt.Errorf("server certificate is not valid for expected hostname %q", clusterInfoURL.Hostname())
+			return nil, fmt.Errorf("failed to parse cluster CA from the %s configmap: %v", bootstrapapi.ConfigMapClusterInfo, err)
+
+		}
+
+		// Validate the cluster CA public key against the pinned set
+		err = pubKeyPins.Check(clusterCA)
+		if err != nil {
+			return nil, fmt.Errorf("cluster CA found in %s configmap is invalid: %v", bootstrapapi.ConfigMapClusterInfo, err)
+		}
+
+		// Now that we know the proported cluster CA, connect back a second time validating with that CA
+		secureBootstrapConfig := buildSecureBootstrapKubeConfig(endpoint, clusterCABytes)
+		secureClient, err := kubeconfigutil.KubeConfigToClientSet(secureBootstrapConfig)
+		if err != nil {
+			return nil, err
+		}
+
+		fmt.Printf("[discovery] Requesting info from %q again to validate TLS against the pinned public key\n", insecureBootstrapConfig.Clusters[clusterName].Server)
+		var secureClusterInfo *v1.ConfigMap
+		wait.PollImmediateInfinite(constants.DiscoveryRetryInterval, func() (bool, error) {
+			var err error
+			secureClusterInfo, err = secureClient.CoreV1().ConfigMaps(metav1.NamespacePublic).Get(bootstrapapi.ConfigMapClusterInfo, metav1.GetOptions{})
+			if err != nil {
+				fmt.Printf("[discovery] Failed to request cluster info, will try again: [%s]\n", err)
+				return false, nil
+			}
+			return true, nil
+		})
+
+		// Pull the kubeconfig from the securely-obtained ConfigMap and validate that it's the same as what we found the first time
+		secureKubeconfigBytes := []byte(secureClusterInfo.Data[bootstrapapi.KubeConfigKey])
+		if !bytes.Equal(secureKubeconfigBytes, insecureKubeconfigBytes) {
+			return nil, fmt.Errorf("the second kubeconfig from the %s configmap (using validated TLS) was different from the first", bootstrapapi.ConfigMapClusterInfo)
+		}
+
+		secureKubeconfig, err := clientcmd.Load(secureKubeconfigBytes)
+		if err != nil {
+			return nil, fmt.Errorf("couldn't parse the kubeconfig file in the %s configmap: %v", bootstrapapi.ConfigMapClusterInfo, err)
 		}
 
 		fmt.Printf("[discovery] Cluster info signature and contents are valid and TLS certificate validates against pinned roots, will use API Server %q\n", endpoint)
-		return finalConfig, nil
+		return secureKubeconfig, nil
 	})
 
 	return kubeconfigutil.GetClusterFromKubeConfig(baseKubeConfig), nil
+}
+
+// buildInsecureBootstrapKubeConfig makes a KubeConfig object that connects insecurely to the API Server for bootstrapping purposes
+func buildInsecureBootstrapKubeConfig(endpoint string) *clientcmdapi.Config {
+	masterEndpoint := fmt.Sprintf("https://%s", endpoint)
+	clusterName := "kubernetes"
+	bootstrapConfig := kubeconfigutil.CreateBasic(masterEndpoint, clusterName, BootstrapUser, []byte{})
+	bootstrapConfig.Clusters[clusterName].InsecureSkipTLSVerify = true
+	return bootstrapConfig
+}
+
+// buildSecureBootstrapKubeConfig makes a KubeConfig object that connects securely to the API Server for bootstrapping purposes (validating with the specified CA)
+func buildSecureBootstrapKubeConfig(endpoint string, caCert []byte) *clientcmdapi.Config {
+	masterEndpoint := fmt.Sprintf("https://%s", endpoint)
+	bootstrapConfig := kubeconfigutil.CreateBasic(masterEndpoint, "kubernetes", BootstrapUser, caCert)
+	return bootstrapConfig
 }
 
 // runForEndpointsAndReturnFirst loops the endpoints slice and let's the endpoints race for connecting to the master
@@ -211,76 +208,14 @@ func runForEndpointsAndReturnFirst(endpoints []string, fetchKubeConfigFunc func(
 	return resultingKubeConfig
 }
 
-// certChain is an array of *x509.Certificate with a helper to plug into the tls VerifyPeerCertificate hook
-type certChain []*x509.Certificate
-
-// saveCertificateChain parses and saves the array of DER-encoded certificates into a certChain
-func (c *certChain) saveCertificateChain(rawCerts [][]byte, _ [][]*x509.Certificate) error {
-	// Make sure this wrapper is being used correctly
-	if len(*c) != 0 {
-		return errInsecureClientUsedMoreThanOnce
-	}
-
-	// Do a quick sanity check (this should never happen)
-	if len(rawCerts) < 1 {
-		return errInsecureClientEmptyCertChain
-	}
-
-	// Parse and collect each certificate
-	for _, rawCert := range rawCerts {
-		cert, err := x509.ParseCertificate(rawCert)
-		if err != nil {
-			return err
-		}
-		*c = append(*c, cert)
-	}
-
-	return nil
-}
-
-// withInsecureHTTPClient creates a temporary http.Client, passes it to doRequest(...),
-// which should perform a single HTTP request and return the response. The temporary
-// client will not validate TLS certificates in real time, but instead will capture
-// and return the certificates for post-hoc validation.
-func withInsecureHTTPClient(
-	doRequest func(*http.Client) (*http.Response, error),
-) (*http.Response, []*x509.Certificate, error) {
-
-	// certificates will collect the certificate chain presented by the server
-	var certificates certChain
-
-	// Create an HTTP client with a custom TLS transport that saves off the certificate chain for later validation
-	insecureClient := http.Client{
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{
-				InsecureSkipVerify:    true,
-				VerifyPeerCertificate: certificates.saveCertificateChain,
-			},
-		},
-	}
-
-	// Perform what should be a single request using the client
-	response, err := doRequest(&insecureClient)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	// Make sure the wrapper is being used correctly
-	if len(certificates) == 0 {
-		response.Body.Close()
-		return nil, nil, errInsecureClientNoRequest
-	}
-	return response, certificates, nil
-}
-
-// getClusterCA extracts and decodes the root CA section from a clientcmdapi.Cluster
-func getClusterCA(cluster *clientcmdapi.Cluster) (*x509.Certificate, error) {
-	pemBlock, trailingData := pem.Decode(cluster.CertificateAuthorityData)
+// parsePEMCert decodes a PEM-formatted certificate and returns it as an x509.Certificate
+func parsePEMCert(certData []byte) (*x509.Certificate, error) {
+	pemBlock, trailingData := pem.Decode(certData)
 	if pemBlock == nil {
-		return nil, errInvalidPEMData
+		return nil, fmt.Errorf("invalid PEM data")
 	}
 	if len(trailingData) != 0 {
-		return nil, errTrailingPEMData
+		return nil, fmt.Errorf("trailing data after first PEM block")
 	}
 	return x509.ParseCertificate(pemBlock.Bytes)
 }

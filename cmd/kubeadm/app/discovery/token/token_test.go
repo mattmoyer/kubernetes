@@ -18,10 +18,7 @@ package token
 
 import (
 	"encoding/pem"
-	"fmt"
-	"net/http"
 	"strconv"
-	"strings"
 	"testing"
 	"time"
 
@@ -92,7 +89,7 @@ func TestRunForEndpointsAndReturnFirst(t *testing.T) {
 	}
 }
 
-func TestGetClusterCA(t *testing.T) {
+func TestParsePEMCert(t *testing.T) {
 	for _, testCase := range []struct {
 		name        string
 		input       []byte
@@ -103,130 +100,21 @@ func TestGetClusterCA(t *testing.T) {
 		{"multiple certificates", []byte(testCertPEM + "\n" + testCertPEM), false},
 		{"valid", []byte(testCertPEM), true},
 	} {
-		cert, err := getClusterCA(&clientcmdapi.Cluster{
-			CertificateAuthorityData: testCase.input,
-		})
+		cert, err := parsePEMCert(testCase.input)
 		if testCase.expectValid {
 			if err != nil {
-				t.Errorf("failed TestGetClusterCA(%s): unexpected error %v", testCase.name, err)
+				t.Errorf("failed TestParsePEMCert(%s): unexpected error %v", testCase.name, err)
 			}
 			if cert == nil {
-				t.Errorf("failed TestGetClusterCA(%s): returned nil", testCase.name)
+				t.Errorf("failed TestParsePEMCert(%s): returned nil", testCase.name)
 			}
 		} else {
 			if err == nil {
-				t.Errorf("failed TestGetClusterCA(%s): expected an error", testCase.name)
+				t.Errorf("failed TestParsePEMCert(%s): expected an error", testCase.name)
 			}
 			if cert != nil {
-				t.Errorf("failed TestGetClusterCA(%s): expected not to get a certificate back, but got one", testCase.name)
+				t.Errorf("failed TestParsePEMCert(%s): expected not to get a certificate back, but got one", testCase.name)
 			}
 		}
-	}
-}
-
-func TestSaveCertificateChainSuccess(t *testing.T) {
-	var chain certChain
-	var testCerts = [][]byte{testCertDER}
-	err := chain.saveCertificateChain(testCerts, nil)
-	if err != nil {
-		t.Errorf("saveCertificateChain: unexpected error: %v", err)
-	}
-	if len(chain) != 1 {
-		t.Errorf("saveCertificateChain: expected a single certificate in the chain, got %v", chain)
-	}
-}
-
-func TestSaveCertificateChainReuse(t *testing.T) {
-	var chain certChain
-	var testCerts = [][]byte{testCertDER}
-	chain.saveCertificateChain(testCerts, nil)
-	t.Logf("chain: %v", chain)
-	err := chain.saveCertificateChain(testCerts, nil)
-	t.Logf("chain: %v", chain)
-	if err != errInsecureClientUsedMoreThanOnce {
-		t.Errorf("saveCertificateChain: expected errInsecureClientUsedMoreThanOnce, but got %v", err)
-	}
-
-}
-
-func TestSaveCertificateChainInvalid(t *testing.T) {
-	var chain certChain
-	var zero = [][]byte{{0}}
-	err := chain.saveCertificateChain(zero, nil)
-	if err == nil || !strings.Contains(err.Error(), "asn1") {
-		t.Errorf("saveCertificateChain: expected an asn.1 error, but got %v", err)
-	}
-}
-
-func TestSaveCertificateChainEmpty(t *testing.T) {
-	var chain certChain
-	var empty [][]byte
-	err := chain.saveCertificateChain(empty, nil)
-	if err != errInsecureClientEmptyCertChain {
-		t.Errorf("saveCertificateChain: expected errInsecureClientEmptyCertChain, but got %v", err)
-	}
-}
-
-func TestWithInsecureHTTPClientSuccess(t *testing.T) {
-	responseIn := http.Response{}
-	responseOut, certs, err := withInsecureHTTPClient(func(c *http.Client) (*http.Response, error) {
-		c.Transport.(*http.Transport).TLSClientConfig.VerifyPeerCertificate([][]byte{testCertDER}, nil)
-		return &responseIn, nil
-	})
-	if responseOut != &responseIn {
-		t.Errorf("expected response to be passed through")
-	}
-	if len(certs) != 1 {
-		t.Errorf("expected certs to have a single item")
-	}
-	if err != nil {
-		t.Errorf("unexpected error: %v", err)
-	}
-}
-
-func TestWithInsecureHTTPClientInnerError(t *testing.T) {
-	testErr := fmt.Errorf("test")
-	response, certs, err := withInsecureHTTPClient(func(*http.Client) (*http.Response, error) {
-		return nil, testErr
-	})
-	if response != nil {
-		t.Errorf("expected nil response")
-	}
-	if certs != nil {
-		t.Errorf("expected nil certs")
-	}
-	if err != testErr {
-		t.Errorf("expected testErr, got %v", err)
-	}
-}
-
-// mockCloser is a mock io.ReadCloser so we can test whether it gets closed
-type mockCloser struct {
-	wasClosed bool
-}
-
-func (c *mockCloser) Close() error {
-	c.wasClosed = true
-	return nil
-}
-func (c *mockCloser) Read([]byte) (int, error) { return 0, nil }
-
-func TestWithInsecureHTTPClientNoCall(t *testing.T) {
-	mockBody := &mockCloser{}
-	responseInner := http.Response{Body: mockBody}
-	response, certs, err := withInsecureHTTPClient(func(*http.Client) (*http.Response, error) {
-		return &responseInner, nil
-	})
-	if response != nil {
-		t.Errorf("expected nil response")
-	}
-	if certs != nil {
-		t.Errorf("expected nil certs")
-	}
-	if err != errInsecureClientNoRequest {
-		t.Errorf("expected errInsecureClientNoRequest, got %v", err)
-	}
-	if !mockBody.wasClosed {
-		t.Errorf("expected the http response body to be closed")
 	}
 }
