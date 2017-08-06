@@ -102,15 +102,15 @@ type NodeConfiguration struct {
 	TLSBootstrapToken        string
 	Token                    string
 
-	// TLSDiscoveryRootCAPubKeys specifies a set of public key pins. The root CA
+	// DiscoveryTokenCACertHashes specifies a set of public key pins. The root CA
 	// found during TLS discovery must match one of these values. Specifying an
 	// empty set disables root CA pinning. Each hash is a hex encoded SHA-256
 	// hash of the Subject Public Key Info (SPKI) object in DER-encoded ASN.1.
 	// This is similar to the format defined in https://tools.ietf.org/html/rfc7469#section-2.4.
 	// These hashes can be calculated using, e.g.,
-	// `openssl x509 -pubkey -in ca.crt openssl rsa -pubin -outform der 2>&/dev/null | openssl dgst -sha256 -hex`
-	TLSDiscoveryRootCAPubKeys []string
+	// `openssl x509 -pubkey -in ca.crt openssl rsa -pubin -outform der 2>&/dev/null | (echo -n "sha256:"; openssl dgst -sha256 -hex)`
+	DiscoveryTokenCACertHashes []string
 
-	// TLSDiscoveryAllowUnsafe disables warnings when token-based TLS discovery is used and TLSDiscoveryRootCAPubKeys is empty
-	TLSDiscoveryAllowUnsafe bool
+	// DiscoveryTokenUnsafeSkipCAVerification disables warnings when token-based TLS discovery is used and DiscoveryTokenCACertHashes is empty
+	DiscoveryTokenUnsafeSkipCAVerification bool
 }

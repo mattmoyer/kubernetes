@@ -136,14 +136,14 @@ func ValidateArgSelection(cfg *kubeadm.NodeConfiguration, fldPath *field.Path) f
 		allErrs = append(allErrs, field.Required(fldPath, "DiscoveryTokenAPIServers not set"))
 	}
 
-	if len(cfg.DiscoveryFile) != 0 && len(cfg.TLSDiscoveryRootCAPubKeys) != 0 {
-		allErrs = append(allErrs, field.Invalid(fldPath, "", "TLSDiscoveryRootCAPubKeys cannot be used with DiscoveryFile"))
+	if len(cfg.DiscoveryFile) != 0 && len(cfg.DiscoveryTokenCACertHashes) != 0 {
+		allErrs = append(allErrs, field.Invalid(fldPath, "", "DiscoveryTokenCACertHashes cannot be used with DiscoveryFile"))
 	}
 
 	// TODO: convert this warning to an error after v1.8
-	if len(cfg.DiscoveryFile) == 0 && len(cfg.TLSDiscoveryRootCAPubKeys) == 0 && !cfg.TLSDiscoveryAllowUnsafe {
-		fmt.Println("[validation] WARNING: using token-based discovery without TLSDiscoveryRootCAPubKeys can be unsafe (see https://kubernetes.io/docs/admin/kubeadm/#kubeadm-join).")
-		fmt.Println("[validation] WARNING: Pass --tls-discovery-allow-unsafe to disable this warning. This warning will become an error in Kubernetes 1.9.")
+	if len(cfg.DiscoveryFile) == 0 && len(cfg.DiscoveryTokenCACertHashes) == 0 && !cfg.DiscoveryTokenUnsafeSkipCAVerification {
+		fmt.Println("[validation] WARNING: using token-based discovery without DiscoveryTokenCACertHashes can be unsafe (see https://kubernetes.io/docs/admin/kubeadm/#kubeadm-join).")
+		fmt.Println("[validation] WARNING: Pass --discovery-token-unsafe-skip-ca-verification to disable this warning. This warning will become an error in Kubernetes 1.9.")
 	}
 
 	// TODO remove once we support multiple api servers

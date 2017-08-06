@@ -66,7 +66,7 @@ var (
 		You can now join any number of machines by running the following on each node
 		as root:
 
-		  kubeadm join --token {{.Token}} {{.MasterIP}}:{{.MasterPort}} --tls-discovery-root-ca {{.CAPubKeyPin}}
+		  kubeadm join --token {{.Token}} {{.MasterIP}}:{{.MasterPort}} --discovery-token-ca-cert-hash {{.CAPubKeyPin}}
 
 		`)))
 )

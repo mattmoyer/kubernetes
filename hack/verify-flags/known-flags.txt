@@ -173,6 +173,8 @@ disable-log-dump
 discovery-file
 discovery-port
 discovery-token
+discovery-token-ca-cert-hash
+discovery-token-unsafe-skip-ca-verification
 dns-bind-address
 dns-domain
 dns-port
@@ -685,8 +687,6 @@ test-timeout
 tls-bootstrap-token
 tls-ca-file
 tls-cert-file
-tls-discovery-allow-unsafe
-tls-discovery-root-ca
 tls-private-key-file
 tls-sni-cert-key
 token-auth-file

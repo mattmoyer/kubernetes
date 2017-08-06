@@ -47,7 +47,7 @@ func RetrieveValidatedClusterInfo(discoveryToken string, tokenAPIServers, rootCA
 		return nil, err
 	}
 
-	// Load the cfg.TLSDiscoveryRootCAPubKeys into a pubkeypin.Set
+	// Load the cfg.DiscoveryTokenCACertHashes into a pubkeypin.Set
 	pubKeyPins := pubkeypin.NewSet()
 	err = pubKeyPins.Allow(rootCAPubKeys...)
 	if err != nil {
