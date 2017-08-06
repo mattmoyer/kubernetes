@@ -23,11 +23,17 @@ import (
 	"crypto/x509"
 	"encoding/hex"
 	"fmt"
+	"strings"
+)
+
+const (
+	// formatSHA256 is the prefix for pins that are full-length SHA-256 hashes encoded in base 16 (hex)
+	formatSHA256 = "sha256"
 )
 
 // Set is a set of pinned x509 public keys.
 type Set struct {
-	hashes map[string]bool
+	sha256Hashes map[string]bool
 }
 
 // NewSet returns a new, empty PubKeyPinSet
@@ -38,37 +44,33 @@ func NewSet() *Set {
 // Allow adds an allowed public key hash to the Set
 func (s *Set) Allow(pubKeyHashes ...string) error {
 	for _, pubKeyHash := range pubKeyHashes {
-		// validate that the hash is valid hex
-		_, err := hex.DecodeString(pubKeyHash)
-		if err != nil {
-			return fmt.Errorf("invalid public key hash: %v", err)
+		parts := strings.Split(pubKeyHash, ":")
+		if len(parts) != 2 {
+			return fmt.Errorf("invalid public key hash, expected \"format:value\"")
 		}
+		format, value := parts[0], parts[1]
 
-		// validate that the hash is the right length to be a full SHA-256 hash
-		hashLength := hex.DecodedLen(len(pubKeyHash))
-		if hashLength != sha256.Size {
-			return fmt.Errorf("invalid public key hash (expected a %d byte SHA-256 hash, found %d bytes)", sha256.Size, hashLength)
+		switch strings.ToLower(format) {
+		case "sha256":
+			return s.allowSHA256(value)
+		default:
+			return fmt.Errorf("unknown hash format %q", format)
 		}
-
-		// in the end, just store the original hex string in memory
-		s.hashes[pubKeyHash] = true
 	}
 	return nil
 }
 
 // Check if a certificate matches one of the public keys in the set
 func (s *Set) Check(certificate *x509.Certificate) error {
-	actualHash := sha256.Sum256(certificate.RawSubjectPublicKeyInfo)
-	actualHashHex := hex.EncodeToString(actualHash[:])
-	if s.hashes[actualHashHex] {
+	if s.checkSHA256(certificate) {
 		return nil
 	}
-	return fmt.Errorf("public key %s not pinned", hex.EncodeToString(actualHash[:]))
+	return fmt.Errorf("public key %s not pinned", Hash(certificate))
 }
 
 // Empty returns true if the Set contains no pinned public keys.
 func (s *Set) Empty() bool {
-	return len(s.hashes) == 0
+	return len(s.sha256Hashes) == 0
 }
 
 // Hash calculates the SHA-256 hash of the Subject Public Key Information (SPKI)
@@ -76,5 +78,31 @@ func (s *Set) Empty() bool {
 // hex encoded string (suitable for passing to Set.Allow).
 func Hash(certificate *x509.Certificate) string {
 	spkiHash := sha256.Sum256(certificate.RawSubjectPublicKeyInfo)
-	return hex.EncodeToString(spkiHash[:])
+	return formatSHA256 + ":" + strings.ToLower(hex.EncodeToString(spkiHash[:]))
+}
+
+// allowSHA256 validates a "sha256" format hash and adds a canonical version of it into the Set
+func (s *Set) allowSHA256(hash string) error {
+	// validate that the hash is the right length to be a full SHA-256 hash
+	hashLength := hex.DecodedLen(len(hash))
+	if hashLength != sha256.Size {
+		return fmt.Errorf("expected a %d byte SHA-256 hash, found %d bytes", sha256.Size, hashLength)
+	}
+
+	// validate that the hash is valid hex
+	_, err := hex.DecodeString(hash)
+	if err != nil {
+		return err
+	}
+
+	// in the end, just store the original hex string in memory (in lowercase)
+	s.sha256Hashes[strings.ToLower(hash)] = true
+	return nil
+}
+
+// checkSHA256 returns true if the certificate's "sha256" hash is pinned in the Set
+func (s *Set) checkSHA256(certificate *x509.Certificate) bool {
+	actualHash := sha256.Sum256(certificate.RawSubjectPublicKeyInfo)
+	actualHashHex := strings.ToLower(hex.EncodeToString(actualHash[:]))
+	return s.sha256Hashes[actualHashHex]
 }

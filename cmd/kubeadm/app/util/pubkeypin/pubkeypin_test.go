@@ -19,6 +19,7 @@ package pubkeypin
 import (
 	"crypto/x509"
 	"encoding/pem"
+	"strings"
 	"testing"
 )
 
@@ -48,7 +49,7 @@ aH+sfuxT8xeTPb3kjzF9eJTlnEquUDLM
 
 // expectedHash can be verified using the openssl CLI:
 // openssl x509 -pubkey -in test.crt openssl rsa -pubin -outform der 2>&/dev/null | openssl dgst -sha256 -hex
-const expectedHash = `345959acb2c3b2feb87d281961c893f62a314207ef02599f1cc4a5fb255480b3`
+const expectedHash = `sha256:345959acb2c3b2feb87d281961c893f62a314207ef02599f1cc4a5fb255480b3`
 
 // testCert2PEM is a second test cert generated the same way as testCertPEM
 const testCert2PEM = `
@@ -126,9 +127,9 @@ func TestSet(t *testing.T) {
 		return
 	}
 
-	err = s.Allow(expectedHash)
+	err = s.Allow(strings.ToUpper(expectedHash))
 	if err != nil || s.Empty() {
-		t.Error("expected allowing expectedHash to succeed")
+		t.Error("expected allowing uppercase expectedHash to succeed")
 		return
 	}
 
