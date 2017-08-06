@@ -102,15 +102,18 @@ type NodeConfiguration struct {
 	TLSBootstrapToken        string
 	Token                    string
 
-	// DiscoveryTokenCACertHashes specifies a set of public key pins. The root CA
-	// found during TLS discovery must match one of these values. Specifying an
-	// empty set disables root CA pinning. Each hash is a hex encoded SHA-256
-	// hash of the Subject Public Key Info (SPKI) object in DER-encoded ASN.1.
-	// This is similar to the format defined in https://tools.ietf.org/html/rfc7469#section-2.4.
-	// These hashes can be calculated using, e.g.,
-	// `openssl x509 -pubkey -in ca.crt openssl rsa -pubin -outform der 2>&/dev/null | (echo -n "sha256:"; openssl dgst -sha256 -hex)`
+	// DiscoveryTokenCACertHashes specifies a set of public key pins to verify
+	// when token-based discovery is used. The root CA found during discovery
+	// must match one of these values. Specifying an empty set disables root CA
+	// pinning, which can be unsafe. Each hash is specified as "<type>:<value>",
+	// where the only currently supported type is "sha256". This is a hex-encoded
+	// SHA-256 hash of the Subject Public Key Info (SPKI) object in DER-encoded
+	// ASN.1. These hashes can be calculated using, for example, OpenSSL:
+	// openssl x509 -pubkey -in ca.crt openssl rsa -pubin -outform der 2>&/dev/null | openssl dgst -sha256 -hex
 	DiscoveryTokenCACertHashes []string
 
-	// DiscoveryTokenUnsafeSkipCAVerification disables warnings when token-based TLS discovery is used and DiscoveryTokenCACertHashes is empty
+	// DiscoveryTokenUnsafeSkipCAVerification allows token-based discovery
+	// without CA verification via DiscoveryTokenCACertHashes. This can weaken
+	// the security of kubeadm since other nodes can impersonate the master.
 	DiscoveryTokenUnsafeSkipCAVerification bool
 }
