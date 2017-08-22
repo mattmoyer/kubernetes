@@ -23,6 +23,7 @@ import (
 	"crypto/subtle"
 	"fmt"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/golang/glog"
@@ -79,6 +80,7 @@ func tokenErrorf(s *api.Secret, format string, i ...interface{}) {
 //       token-id: ( token id )
 //       # Required key usage.
 //       usage-bootstrap-authentication: true
+//       auth-extra-groups: "system:bootstrappers:custom-group1,system:bootstrappers:custom-group2"
 //       # May also contain an expiry.
 //
 // Tokens are expected to be of the form:
@@ -134,9 +136,15 @@ func (t *TokenAuthenticator) AuthenticateToken(token string) (user.Info, bool, e
 		return nil, false, nil
 	}
 
+	groups, err := getGroups(secret)
+	if err != nil {
+		tokenErrorf(secret, "has invalid value for key %s: %v.", bootstrapapi.BootstrapTokenExtraGroupsKey, err)
+		return nil, false, nil
+	}
+
 	return &user.DefaultInfo{
 		Name:   bootstrapapi.BootstrapUserPrefix + string(id),
-		Groups: []string{bootstrapapi.BootstrapDefaultGroup},
+		Groups: groups,
 	}, true, nil
 }
 
@@ -183,4 +191,25 @@ func parseToken(s string) (string, string, error) {
 		return "", "", fmt.Errorf("token [%q] was not of form [%q]", s, tokenRegexpString)
 	}
 	return split[1], split[2], nil
+}
+
+// getGroups loads and validates the bootstrapapi.BootstrapTokenExtraGroupsKey
+// key from the bootstrap token secret, returning a list of group names or an
+// error if any of the group names are invalid.
+func getGroups(secret *api.Secret) ([]string, error) {
+	groupsString := getSecretString(secret, bootstrapapi.BootstrapTokenExtraGroupsKey)
+	if groupsString == "" {
+		return []string{bootstrapapi.BootstrapDefaultGroup}, nil
+	}
+
+	// split on commas amd validate each group
+	groups := strings.Split(groupsString, ",")
+	for _, group := range groups {
+		if err := bootstrapapi.ValidateBootstrapGroupName(group); err != nil {
+			return nil, err
+		}
+	}
+
+	// always prepend the BootstrapDefaultGroup
+	return append([]string{bootstrapapi.BootstrapDefaultGroup}, groups...), nil
 }
